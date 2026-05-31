@@ -13,6 +13,10 @@
 #include <SPI.h>
 #include <Wire.h>
 
+// Define display dimensions
+#define DISP_WIDTH 128
+#define DISP_HEIGHT 64
+
 // Setup I/O pins
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
     // ESP32 C3 pins
@@ -44,7 +48,10 @@
 #endif
 
 // Predeclare Functions
-
+uint8_t centreTextPosX(char* text);
+void renderText(char* text, char alignment, uint8_t y);
+void renderHeading(char* headingText, const uint8_t* font, char alignment);
+void renderValue(int value, const uint8_t* font, char alignment);
 char checkButtonPress(int pin, int* button_state, int* last_button_state);
 
 // Note on rotation:
@@ -58,9 +65,8 @@ U8G2_SH1106_128X64_NONAME_1_4W_HW_SPI u8g2(U8G2_R2, spi_cs, spi_dc, spi_rst);
 int button_state = 0;
 int last_button_state = 0;
 int counter = 0;
-char counter_text[20];
 
-const char *heading = "button";
+char heading[20] = "button";
 
 void setup(void)
 {
@@ -70,7 +76,7 @@ void setup(void)
     // Initialise serial
     Serial.begin(115200);
 
-    // Initialise button
+    // Initialise button as an input
     pinMode(sw_pin, INPUT);
 }
 
@@ -79,12 +85,10 @@ void loop(void)
     u8g2.firstPage();
     do
     {
-        // Set heading
-        u8g2.setFont(u8g2_font_inr16_mr);
-        u8g2.setFontPosTop();
-        u8g2.drawStr(64 - u8g2.getStrWidth(heading) / 2, 0, heading);
+        // Set heading 
+        renderHeading(heading, u8g2_font_inr16_mr, 'c');
 
-        // check for button press
+        // Check for button press
         if (checkButtonPress(sw_pin, &button_state, &last_button_state))
         {
             counter++;
@@ -93,16 +97,79 @@ void loop(void)
             Serial.println("Button pressed!");
         }
 
-        // counter to text
-        sprintf(counter_text, "%d", counter);
+        // Display value
+        renderValue(counter, u8g2_font_inr30_mr, 'c');
 
-        u8g2.setFont(u8g2_font_inr30_mr);
-        u8g2.setFontPosBottom();
-        // u8g2.drawStr(0,30,"Hello World!");
-
-        // Render number of keypresses centre aligned horizontally
-        u8g2.drawStr(64 - u8g2.getStrWidth(counter_text) / 2, 64, counter_text);
     } while (u8g2.nextPage());
+}
+
+// Return the x position of the left of a string to centre text
+uint8_t centreTextPosX(char* text)
+{
+    return (DISP_WIDTH - u8g2.getStrWidth(text)) / 2;
+}
+
+// Render text assuming font and font pos have been set already
+//  - Alignment can be 'l', 'c' or 'r'
+void renderText(char* text, char alignment, uint8_t y)
+{
+    // Work out alignment
+    uint8_t x = 0;
+
+    switch (alignment)
+    {
+        case 'l':
+            break;
+        
+        case 'c':
+            x = centreTextPosX(text);
+            break;
+        
+        case 'r':
+            x = DISP_WIDTH - u8g2.getStrWidth(text);
+            break;
+
+        default: // Defaults to left aligned
+            break;
+    }
+
+    // Render text
+    u8g2.drawStr(x, y, text);
+}
+
+// Display the heading
+//  - Alignment can be 'l', 'c' or 'r'
+void renderHeading(char* headingText, const uint8_t* font, char alignment)
+{
+    // Set the font, and set reference point to top left of text
+    u8g2.setFont(font);
+    u8g2.setFontPosTop();
+
+    // Set vertical position of text
+    uint8_t y = 0;
+
+    // Render text
+    renderText(headingText, alignment, y);
+}
+
+// Render a value (int)
+//  - Alignment can be 'l', 'c' or 'r'
+void renderValue(int value, const uint8_t* font, char alignment)
+{
+    // Set the font, and set reference point to bottom left of text
+    u8g2.setFont(font);
+    u8g2.setFontPosBottom();
+
+    // Convert value to char *
+    char value_text[20];
+
+    sprintf(value_text, "%d", value);
+
+    // Set vertical position of text
+    uint8_t y = DISP_HEIGHT;
+
+    // Render text
+    renderText(value_text, alignment, y);
 }
 
 // Check for a rising edge of a pushbutton on a given pin. Includes 15 ms debounce
