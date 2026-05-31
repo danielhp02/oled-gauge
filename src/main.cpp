@@ -43,6 +43,10 @@
     #error "Untested board. Please define pins."
 #endif
 
+// Predeclare Functions
+
+char checkButtonPress(int pin, int* button_state, int* last_button_state);
+
 // Note on rotation:
 //  - U8G2_R0: pins up
 //  - U8G2_R2: pins down
@@ -81,18 +85,13 @@ void loop(void)
         u8g2.drawStr(64 - u8g2.getStrWidth(heading) / 2, 0, heading);
 
         // check for button press
-        button_state = digitalRead(sw_pin);
-        if (button_state != last_button_state)
+        if (checkButtonPress(sw_pin, &button_state, &last_button_state))
         {
-            if (button_state == HIGH)
-            { // rising edge
-                counter++;
-                Serial.println("Button pressed!");
-            }
-            delay(15); // debounce
-        }
+            counter++;
 
-        last_button_state = button_state;
+            // log button press over serial
+            Serial.println("Button pressed!");
+        }
 
         // counter to text
         sprintf(counter_text, "%d", counter);
@@ -104,4 +103,34 @@ void loop(void)
         // Render number of keypresses centre aligned horizontally
         u8g2.drawStr(64 - u8g2.getStrWidth(counter_text) / 2, 64, counter_text);
     } while (u8g2.nextPage());
+}
+
+// Check for a rising edge of a pushbutton on a given pin. Includes 15 ms debounce
+char checkButtonPress(int pin, int* button_state, int* last_button_state)
+{
+    // Initialise return value to false
+    char button_pressed = 0;
+
+    // Read current state
+    *button_state = digitalRead(pin);
+
+    // Check if state has changed
+    if (*button_state != *last_button_state)
+    {
+        // Check if the new state is HIGH (rising edge)
+        if (*button_state == HIGH)
+        {
+            // Set return value to true
+            button_pressed = 1;
+        }
+
+        // debounce
+        delay(15); // ms
+    }
+
+    // Update previous state
+    *last_button_state = *button_state;
+
+    // Return whether a rising edge was detected or not
+    return button_pressed;
 }
