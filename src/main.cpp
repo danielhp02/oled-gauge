@@ -78,6 +78,10 @@ class MyCallbacks: public BLECharacteristicCallbacks {
 
         // Write a newline to console
         Serial.println();
+
+        // Update display
+        char ble_heading[] = "bluetooth";
+        updateValueDisplay(ble_heading, value[0]);
       }
     }
 };
