@@ -13,9 +13,17 @@
 #include <SPI.h>
 #include <Wire.h>
 
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+
 // Define display dimensions
 #define DISP_WIDTH 128
 #define DISP_HEIGHT 64
+
+// Define Bluetooth UUIDs
+#define SERVICE_UUID        "6b4b1061-f195-4060-963a-b7bfe1761866"
+#define CHARACTERISTIC_UUID "84a0ca94-4cb6-4440-b507-1819c97e7a83"
 
 // Setup I/O pins
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
@@ -53,6 +61,26 @@ void renderText(char* text, char alignment, uint8_t y);
 void renderHeading(char* headingText, const uint8_t* font, char alignment);
 void renderValue(int value, const uint8_t* font, char alignment);
 char checkButtonPress(int pin, int* button_state, int* last_button_state);
+void updateValueDisplay(char* heading, int counter, int pin, int* button_state, int* last_button_state);
+
+// Callback class for Bluetooth
+class MyCallbacks: public BLECharacteristicCallbacks {
+    // Callback for when a characteristic is written to using Nordic nRF on an Android device
+    void onWrite(BLECharacteristic *pCharacteristic) {
+        // Get new value of characteristic
+        std::string value = pCharacteristic->getValue();
+
+        // Check if value is valid (non-zero length) and print each character
+        // as a string
+        if (value.length() > 0) {
+            for (int i = 0; i < value.length(); i++)
+                Serial.print(value[i]);
+
+        // Write a newline to console
+        Serial.println();
+      }
+    }
+};
 
 // Note on rotation:
 //  - U8G2_R0: pins up
@@ -72,35 +100,57 @@ void setup(void)
 {
     // Initialise display
     u8g2.begin();
+    updateValueDisplay(heading, counter, sw_pin, &button_state, &last_button_state);
 
     // Initialise serial
     Serial.begin(115200);
 
     // Initialise button as an input
     pinMode(sw_pin, INPUT);
+
+    // ------ Initialise BLE ------ 
+    // Create BLE device
+    BLEDevice::init("ESP32 OLED Gauge");
+
+    // Create the BLE server
+    BLEServer *pServer = BLEDevice::createServer();
+
+    // Create the BLE service
+    BLEService *pService = pServer->createService(SERVICE_UUID);
+
+    // Create a BLE characteristic
+    BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+                                            CHARACTERISTIC_UUID,
+                                            BLECharacteristic::PROPERTY_READ |
+                                            BLECharacteristic::PROPERTY_WRITE
+                                        );
+
+    pCharacteristic->setCallbacks(new MyCallbacks());
+
+    pCharacteristic->setValue("Hello World");
+
+    // Start the service
+    pService->start();
+
+    // Start advertising to nearby devices
+    BLEAdvertising *pAdvertising = pServer->getAdvertising();
+    pAdvertising->start();
 }
 
 void loop(void)
 {
-    u8g2.firstPage();
-    do
+    // Check for button press
+    if (checkButtonPress(sw_pin, &button_state, &last_button_state))
     {
-        // Set heading 
-        renderHeading(heading, u8g2_font_inr16_mr, 'c');
+        // Increment counter
+        counter++;
 
-        // Check for button press
-        if (checkButtonPress(sw_pin, &button_state, &last_button_state))
-        {
-            counter++;
+        // Update display
+        updateValueDisplay(heading, counter, sw_pin, &button_state, &last_button_state);
 
-            // log button press over serial
-            Serial.println("Button pressed!");
-        }
-
-        // Display value
-        renderValue(counter, u8g2_font_inr30_mr, 'c');
-
-    } while (u8g2.nextPage());
+        // log button press over serial
+        Serial.println("Button pressed!");
+    }
 }
 
 // Return the x position of the left of a string to centre text
@@ -200,4 +250,18 @@ char checkButtonPress(int pin, int* button_state, int* last_button_state)
 
     // Return whether a rising edge was detected or not
     return button_pressed;
+}
+
+void updateValueDisplay(char* heading, int counter, int pin, int* button_state, int* last_button_state)
+{
+    u8g2.firstPage();
+    do
+    {
+        // Set heading 
+        renderHeading(heading, u8g2_font_inr16_mr, 'c');
+
+        // Display value
+        renderValue(counter, u8g2_font_inr30_mr, 'c');
+
+    } while (u8g2.nextPage());
 }
