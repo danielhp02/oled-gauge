@@ -61,7 +61,7 @@ void renderText(char* text, char alignment, uint8_t y);
 void renderHeading(char* headingText, const uint8_t* font, char alignment);
 void renderValue(int value, const uint8_t* font, char alignment);
 char checkButtonPress(int pin, int* button_state, int* last_button_state);
-void updateValueDisplay(char* heading, int counter, int pin, int* button_state, int* last_button_state);
+void updateValueDisplay(char* heading, int value);
 
 // Callback class for Bluetooth
 class MyCallbacks: public BLECharacteristicCallbacks {
@@ -100,7 +100,7 @@ void setup(void)
 {
     // Initialise display
     u8g2.begin();
-    updateValueDisplay(heading, counter, sw_pin, &button_state, &last_button_state);
+    updateValueDisplay(heading, counter);
 
     // Initialise serial
     Serial.begin(115200);
@@ -146,7 +146,7 @@ void loop(void)
         counter++;
 
         // Update display
-        updateValueDisplay(heading, counter, sw_pin, &button_state, &last_button_state);
+        updateValueDisplay(heading, counter);
 
         // log button press over serial
         Serial.println("Button pressed!");
@@ -252,7 +252,9 @@ char checkButtonPress(int pin, int* button_state, int* last_button_state)
     return button_pressed;
 }
 
-void updateValueDisplay(char* heading, int counter, int pin, int* button_state, int* last_button_state)
+// Update display value with a given heading
+// Both text fields will be centre aligned
+void updateValueDisplay(char* heading, int value)
 {
     u8g2.firstPage();
     do
@@ -261,7 +263,7 @@ void updateValueDisplay(char* heading, int counter, int pin, int* button_state, 
         renderHeading(heading, u8g2_font_inr16_mr, 'c');
 
         // Display value
-        renderValue(counter, u8g2_font_inr30_mr, 'c');
+        renderValue(value, u8g2_font_inr30_mr, 'c');
 
     } while (u8g2.nextPage());
 }
