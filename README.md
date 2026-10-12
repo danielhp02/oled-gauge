@@ -1,8 +1,6 @@
 # OLED Gauge
 Displays data from an ELM327 based Bluetooth ODBII reader on a 128x64 OLD display, running on an ESP32.
 
-
-
 ## Hardware
 ### Components
  - ESP32-C3 Mini ([example](https://core-electronics.com.au/esp32-c3-mini-dev-board-risc-v-processor-wi-fi-bt5-smd-compatible.html))
@@ -13,6 +11,11 @@ Displays data from an ELM327 based Bluetooth ODBII reader on a 128x64 OLD displa
 ![Wiring diagram using an ESP32 C3](/hardware/ESP32%20display%20wiring%20diagram.png)
 
 Note pin numbering goes from 1-18, starting with the 5V pin as pin 1.
+
+## Software Setup
+1. Install the PlatformIO extension for VSCode
+2. Build using tick icon in bottom bar or otherwise
+3. Upload to ESP
 
 ## State of Work
 ### Software
