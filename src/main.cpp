@@ -1,5 +1,6 @@
 // gauge
 // 128x64 monochrome OLED display for output of data from an ELM327 OBDII dongle
+// using BLEDevice as a client
 
 // Display docs: https://github.com/olikraus/u8g2/wiki
 // Display wired up as: https://media.jaycar.com.au/product/resources/XC3728_manualMain_92743.pdf
@@ -13,9 +14,19 @@
 #include <SPI.h>
 #include <Wire.h>
 
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+// #include <BLEServer.h>
+#include <BLEScan.h>
+#include <BLEAdvertisedDevice.h>
+
 // Define display dimensions
 #define DISP_WIDTH 128
 #define DISP_HEIGHT 64
+
+// Define Bluetooth UUIDs
+// #define SERVICE_UUID        "6b4b1061-f195-4060-963a-b7bfe1761866"
+// #define CHARACTERISTIC_UUID "84a0ca94-4cb6-4440-b507-1819c97e7a83"
 
 // Setup I/O pins
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
@@ -53,6 +64,82 @@ void renderText(char* text, char alignment, uint8_t y);
 void renderHeading(char* headingText, const uint8_t* font, char alignment);
 void renderValue(int value, const uint8_t* font, char alignment);
 char checkButtonPress(int pin, int* button_state, int* last_button_state);
+void updateValueDisplay(char* heading, int value);
+bool connectToReader();
+int parseCoolantTemp(char *rawTemp);
+
+int scanTime = 5; // in seconds
+BLEScan* pBLEScan;
+
+static boolean doScan = false;
+static boolean doConnect = false;
+static boolean connected = false;
+static BLEAdvertisedDevice *obdDevice = nullptr;
+static BLEClient *pClient = nullptr;
+
+// static BLEUUID serviceUUID;
+static BLERemoteService *pService = nullptr;
+static BLERemoteCharacteristic *pTxCharacteristic = nullptr;
+static BLERemoteCharacteristic *pRxCharacteristic = nullptr;
+
+static bool waitingForResponse = false;
+
+// Callback class for Bluetooth
+class MyCallbacks: public BLEAdvertisedDeviceCallbacks
+{
+  // Callback for when a device is found
+  void onResult(BLEAdvertisedDevice advertisedDevice)
+  {
+    // Serial.printf("Advertised Device: %s \n", advertisedDevice.toString().c_str());
+    std::string deviceName = advertisedDevice.getName();
+    Serial.printf("device name: %s \n", deviceName.c_str());
+
+    if (advertisedDevice.getName() == "OBDII")
+    {
+      Serial.printf("\nOBD device found\n");
+
+      // stop scanning and connect
+      BLEDevice::getScan()->stop();
+      obdDevice = new BLEAdvertisedDevice(advertisedDevice);
+      doConnect = true;
+      doScan = false;
+    }
+  }
+};
+
+// Client callbacks to handle connection events
+class MyClientCallback : public BLEClientCallbacks
+{
+  void onConnect(BLEClient *pclient)
+  {
+    Serial.println("Connected to OBDII reader");
+  }
+
+  void onDisconnect(BLEClient *pclient)
+  {
+    connected = false;
+    Serial.println("Disconnected from OBDII reader");
+  }
+};
+
+// Callback for received data
+void notifyCallback(BLERemoteCharacteristic* characteristic, uint8_t* data, size_t length, bool isNotify)
+{
+    Serial.print("Received: ");
+    Serial.write(data, length);
+    Serial.println();
+
+    // Convert value to int
+    char temp[2] = {data[6], data[7]};
+    int coolantTemp = parseCoolantTemp(temp);
+
+    // update display
+    char coolantHeading[] = "coolant";
+    updateValueDisplay(coolantHeading, coolantTemp);
+
+    // no longer waiting for a response, so ok to request more data
+    waitingForResponse = false;
+}
 
 // Note on rotation:
 //  - U8G2_R0: pins up
@@ -70,37 +157,181 @@ char heading[20] = "button";
 
 void setup(void)
 {
+    // Initialise serial
+    Serial.begin(115200);
+    delay(2000); // wait for serial to initialise
+    Serial.println("Initialising OLED display");
+
     // Initialise display
     u8g2.begin();
 
-    // Initialise serial
-    Serial.begin(115200);
-
     // Initialise button as an input
     pinMode(sw_pin, INPUT);
+
+    // ------ Initialise BLE ------ 
+    Serial.println("Initialising BLE\n");
+    // Create BLE device
+    BLEDevice::init("ESP32 OLED Gauge");
+
+    // initialise scan
+    pBLEScan = BLEDevice::getScan();
+
+    // Attach callback function
+    pBLEScan->setAdvertisedDeviceCallbacks(new MyCallbacks());
+
+    pBLEScan->setActiveScan(true); // active scan uses more power, but get results
+
+    pBLEScan->setInterval(100);
+    pBLEScan->setWindow(99);  // less or equal setInterval value
+
+    // Start a scan
+    pBLEScan->start(scanTime, false);
+
+    Serial.println("Initialised successfully");
 }
 
 void loop(void)
 {
-    u8g2.firstPage();
-    do
+    // connect to obd reader if found
+    if (doConnect)
     {
-        // Set heading 
-        renderHeading(heading, u8g2_font_inr16_mr, 'c');
+        Serial.println("Connecting to device.");
 
-        // Check for button press
-        if (checkButtonPress(sw_pin, &button_state, &last_button_state))
+        if (connectToReader())
         {
-            counter++;
-
-            // log button press over serial
-            Serial.println("Button pressed!");
+            Serial.println("Connected successfully.");
+        }
+        else
+        {
+            Serial.println("Failed to connect.");
         }
 
-        // Display value
-        renderValue(counter, u8g2_font_inr30_mr, 'c');
+        doConnect = false;
+    }
 
-    } while (u8g2.nextPage());
+    // Restart scan if disconnected
+    if (!connected && doScan)
+    {
+        Serial.println("Scanning for OBD readers.");
+        BLEDevice::getScan()->start(5, false);
+        delay(1000);
+    }
+
+    // Successfully connected, update display
+    if (connected)
+    {
+        if (!waitingForResponse)
+        {
+            // Request coolant temp
+            pTxCharacteristic->writeValue("01 05\r");
+
+            // set flag to prevent spamming adapter
+            waitingForResponse = true;
+
+            // The response will be picked up by the notification callback function
+        }
+
+        delay(5000);
+    }
+
+    // Check for button press
+    // TODO: replace with a screen toggle or something
+    if (checkButtonPress(sw_pin, &button_state, &last_button_state))
+    {
+        // Increment counter
+        counter++;
+
+        // Update display
+        // updateValueDisplay(heading, counter);
+
+        // log button press over serial
+        Serial.println("Button pressed!");
+    }
+}
+
+bool connectToReader()
+{
+    Serial.println("Connecting to OBDII reader");
+
+    // create client
+    pClient = BLEDevice::createClient();
+    Serial.println(" - Created client");
+    pClient->setClientCallbacks(new MyClientCallback());
+
+    // Connect to the reader
+    pClient->connect(obdDevice);
+    Serial.println(" - Connected to server");
+
+    connected = true;
+
+    // Get all discovered services
+    auto* services = pClient->getServices();
+
+    // Check for the service with the desired characteristics (1 write, 1 notify)
+    int writeChr = 0;
+    int notifyChr = 0;
+
+    for (auto const& servicePair : *services)
+    {
+        BLERemoteService* service = servicePair.second;
+
+        Serial.printf("\nService: %s\n",
+            service->getUUID().toString().c_str());
+
+        // Get all characteristics in this service
+        auto* characteristics = service->getCharacteristics();
+
+        for (auto const& charPair : *characteristics)
+        {
+            BLERemoteCharacteristic* chr = charPair.second;
+
+            Serial.printf("  Characteristic: %s\n",
+                chr->getUUID().toString().c_str());
+
+            Serial.printf("    Read: %d\n", chr->canRead());
+            Serial.printf("    Write: %d\n", chr->canWrite());
+            Serial.printf("    Notify: %d\n", chr->canNotify());
+            Serial.printf("    Indicate: %d\n", chr->canIndicate());
+
+            // If this is a writable characteristic, save and increment counter
+            if (chr->canWrite())
+            {
+                pTxCharacteristic = chr;
+                writeChr++;
+            }
+
+            // If this is a notifying characteristic, save and increment counter
+            if (chr->canNotify())
+            {
+                pRxCharacteristic = chr;
+                notifyChr++;
+            }
+        }
+
+        // Check if the desired service has been found, if so save
+        if (writeChr == 1 && notifyChr == 1)
+        {
+            pService = service;
+
+            // Register notification callback function
+            pRxCharacteristic->registerForNotify(notifyCallback);
+
+            return true;
+        }
+
+        // If the service wasn't found, reset counters and check the next service
+        writeChr = 0;
+        notifyChr = 0;
+    }
+
+    // Could not find a valid service
+    Serial.printf("Could not find a valid service, is this a compatible OBDII reader?\n");
+    return false;
+}
+
+int parseCoolantTemp(char *rawTemp)
+{
+    return (int)strtol(rawTemp, NULL, 16) - 40; // offset to include negative temps
 }
 
 // Return the x position of the left of a string to centre text
@@ -200,4 +431,20 @@ char checkButtonPress(int pin, int* button_state, int* last_button_state)
 
     // Return whether a rising edge was detected or not
     return button_pressed;
+}
+
+// Update display value with a given heading
+// Both text fields will be centre aligned
+void updateValueDisplay(char* heading, int value)
+{
+    u8g2.firstPage();
+    do
+    {
+        // Set heading 
+        renderHeading(heading, u8g2_font_inr16_mr, 'c');
+
+        // Display value
+        renderValue(value, u8g2_font_inr30_mr, 'c');
+
+    } while (u8g2.nextPage());
 }
