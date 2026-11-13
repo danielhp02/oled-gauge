@@ -85,33 +85,17 @@ static BLERemoteCharacteristic *pRxCharacteristic = nullptr;
 static bool waitingForResponse = false;
 
 // Callback class for Bluetooth
-class MyCallbacks: public BLEAdvertisedDeviceCallbacks {
-    // Callback for when a characteristic is written to using Nordic nRF on an Android device
-    // void onWrite(BLECharacteristic *pCharacteristic) {
-    //     // Get new value of characteristic
-    //     std::string value = pCharacteristic->getValue();
-
-    //     // Check if value is valid (non-zero length) and print each character
-    //     // as a string
-    //     if (value.length() > 0) {
-    //         for (int i = 0; i < value.length(); i++)
-    //             Serial.print(value[i]);
-
-    //     // Write a newline to console
-    //     Serial.println();
-
-    //     // Update display
-    //     char ble_heading[] = "bluetooth";
-    //     updateValueDisplay(ble_heading, value[0]);
-    //   }
-    // }
-
+class MyCallbacks: public BLEAdvertisedDeviceCallbacks
+{
   // Callback for when a device is found
-  void onResult(BLEAdvertisedDevice advertisedDevice) {
+  void onResult(BLEAdvertisedDevice advertisedDevice)
+  {
     // Serial.printf("Advertised Device: %s \n", advertisedDevice.toString().c_str());
     std::string deviceName = advertisedDevice.getName();
     Serial.printf("device name: %s \n", deviceName.c_str());
-    if (advertisedDevice.getName() == "OBDII") {
+
+    if (advertisedDevice.getName() == "OBDII")
+    {
       Serial.printf("\nOBD device found\n");
 
       // stop scanning and connect
@@ -124,24 +108,23 @@ class MyCallbacks: public BLEAdvertisedDeviceCallbacks {
 };
 
 // Client callbacks to handle connection events
-class MyClientCallback : public BLEClientCallbacks {
-  void onConnect(BLEClient *pclient) {
+class MyClientCallback : public BLEClientCallbacks
+{
+  void onConnect(BLEClient *pclient)
+  {
     Serial.println("Connected to OBDII reader");
   }
 
-  void onDisconnect(BLEClient *pclient) {
+  void onDisconnect(BLEClient *pclient)
+  {
     connected = false;
     Serial.println("Disconnected from OBDII reader");
   }
 };
 
 // Callback for received data
-void notifyCallback(
-    BLERemoteCharacteristic* characteristic,
-    uint8_t* data,
-    size_t length,
-    bool isNotify
-) {
+void notifyCallback(BLERemoteCharacteristic* characteristic, uint8_t* data, size_t length, bool isNotify)
+{
     Serial.print("Received: ");
     Serial.write(data, length);
     Serial.println();
@@ -181,7 +164,6 @@ void setup(void)
 
     // Initialise display
     u8g2.begin();
-    // updateValueDisplay(heading, counter);
 
     // Initialise button as an input
     pinMode(sw_pin, INPUT);
