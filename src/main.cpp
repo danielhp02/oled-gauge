@@ -14,6 +14,8 @@
 #include <SPI.h>
 #include <Wire.h>
 
+#include <cstring>
+
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 // #include <BLEServer.h>
@@ -66,7 +68,9 @@ void renderValue(int value, const uint8_t* font, char alignment);
 char checkButtonPress(int pin, int* button_state, int* last_button_state);
 void updateValueDisplay(char* heading, int value);
 bool connectToReader();
-int parseCoolantTemp(char *rawTemp);
+
+void requestData();
+void displayData(uint8_t *rawData);
 
 int scanTime = 5; // in seconds
 BLEScan* pBLEScan;
@@ -102,7 +106,7 @@ class MyCallbacks: public BLEAdvertisedDeviceCallbacks
       BLEDevice::getScan()->stop();
       obdDevice = new BLEAdvertisedDevice(advertisedDevice);
       doConnect = true;
-      doScan = false;
+      doScan = true;
     }
   }
 };
@@ -118,6 +122,7 @@ class MyClientCallback : public BLEClientCallbacks
   void onDisconnect(BLEClient *pclient)
   {
     connected = false;
+    doScan = true;
     Serial.println("Disconnected from OBDII reader");
   }
 };
@@ -125,20 +130,28 @@ class MyClientCallback : public BLEClientCallbacks
 // Callback for received data
 void notifyCallback(BLERemoteCharacteristic* characteristic, uint8_t* data, size_t length, bool isNotify)
 {
-    Serial.print("Received: ");
+    Serial.print("Rx: ");
     Serial.write(data, length);
+    // Serial.printf(", length: %d", length);
     Serial.println();
 
-    // Convert value to int
-    char temp[2] = {data[6], data[7]};
-    int coolantTemp = parseCoolantTemp(temp);
-
-    // update display
-    char coolantHeading[] = "coolant";
-    updateValueDisplay(coolantHeading, coolantTemp);
-
-    // no longer waiting for a response, so ok to request more data
-    waitingForResponse = false;
+    // update display if corrent response (i.e. to mode 1 request)
+    if (data[0] == '4' && data[1] == '1')
+    {
+        displayData(data);
+    }
+    else
+    {
+        // Check if OBDII reader has responded with '>', indicating it is ready for another command
+        for (int i = 0; i < length; i++)
+        {
+            if (data[i] == '>')
+            {
+                // no longer waiting for a response, so ok to request more data
+                waitingForResponse = false;
+            }
+        }
+    }
 }
 
 // Note on rotation:
@@ -154,6 +167,13 @@ int last_button_state = 0;
 int counter = 0;
 
 char heading[20] = "button";
+
+// Tracking data to display
+int numFields = 2; // number of supported fields
+
+// Initialise reponse timeout timer, threshold is 2000ms
+unsigned long responseTimer = 0;
+unsigned long responseTimeoutThresh = 2000; // ms
 
 void setup(void)
 {
@@ -192,7 +212,7 @@ void setup(void)
 
 void loop(void)
 {
-    // connect to obd reader if found
+    // Connect to obd reader if found
     if (doConnect)
     {
         Serial.println("Connecting to device.");
@@ -223,15 +243,24 @@ void loop(void)
         if (!waitingForResponse)
         {
             // Request coolant temp
-            pTxCharacteristic->writeValue("01 05\r");
+            // pTxCharacteristic->writeValue("01 05\r");
+            requestData();
 
-            // set flag to prevent spamming adapter
+            // Set flag to prevent spamming adapter
             waitingForResponse = true;
+
+            // Start a timer incase the response times out or an unexpected response is received
+            responseTimer = millis();
 
             // The response will be picked up by the notification callback function
         }
+        // If waiting too long, give up and ask again
+        else if (millis() - responseTimer > responseTimeoutThresh)
+        {
+            waitingForResponse = false;
 
-        delay(5000);
+            Serial.println("Response timed out.");
+        }
     }
 
     // Check for button press
@@ -241,11 +270,14 @@ void loop(void)
         // Increment counter
         counter++;
 
+        // "Overflow" counter if exceeds number of supported fields
+        counter %= numFields;
+
         // Update display
         // updateValueDisplay(heading, counter);
 
         // log button press over serial
-        Serial.println("Button pressed!");
+        Serial.printf("Button pressed! Current field: %d, waiting status: %d\n", counter, waitingForResponse);
     }
 }
 
@@ -263,6 +295,7 @@ bool connectToReader()
     Serial.println(" - Connected to server");
 
     connected = true;
+    doScan = false;
 
     // Get all discovered services
     auto* services = pClient->getServices();
@@ -329,9 +362,84 @@ bool connectToReader()
     return false;
 }
 
-int parseCoolantTemp(char *rawTemp)
+void requestData()
 {
-    return (int)strtol(rawTemp, NULL, 16) - 40; // offset to include negative temps
+    // Initialise request string with mode string
+    char req[10] = "01 ";
+
+    switch (counter)
+    {
+        // Coolant temp
+        case 0:
+            strcat(req, "05");
+            break;
+
+        // RPM
+        case 1:
+            strcat(req, "0C");
+            break;
+    }
+
+    // Add carriage return
+    strcat(req, "\r");
+
+    // Serial.print("Requesting: ");
+    // Serial.write(req, 4);
+    // Serial.println();
+
+    // Send request
+    pTxCharacteristic->writeValue(req); //"01 05\r");
+}
+
+void displayData(uint8_t *rawData)
+{
+    // inputs: full obd return
+
+    char parsedByteA[2];
+    char parsedByteB[2];
+
+    // initialise variables
+    int coolantTemp;
+    int byteA;
+    int byteB;
+    int rpm;
+
+    // Display
+    switch (counter)
+    {
+        // Coolant temp
+        case 0:
+            // Coolant temp is just one byte
+            parsedByteA[0] = rawData[6];
+            parsedByteA[1] = rawData[7];
+
+            coolantTemp = (int)strtol(parsedByteA, NULL, 16) - 40; // offset to include negative temps
+
+            // update display
+            strcpy(heading, "coolant");
+            updateValueDisplay(heading, coolantTemp);
+
+            break;
+            
+        // RPM
+        case 1:
+            // RPM is two bytes
+            parsedByteA[0] = rawData[6];
+            parsedByteA[1] = rawData[7];
+            parsedByteB[0] = rawData[9]; // skip space
+            parsedByteB[1] = rawData[10];
+
+            byteA = (int)strtol(parsedByteA, NULL, 16);
+            byteB = (int)strtol(parsedByteB, NULL, 16);
+
+            rpm = (256 * byteA + byteB)/4;
+
+            // update display
+            strcpy(heading, "rpm");
+            updateValueDisplay(heading, rpm);
+
+            break;
+    }
 }
 
 // Return the x position of the left of a string to centre text
