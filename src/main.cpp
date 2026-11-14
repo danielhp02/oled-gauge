@@ -144,18 +144,18 @@ void notifyCallback(BLERemoteCharacteristic* characteristic, uint8_t* data, size
     {
         displayData(data);
     }
-    else
+
+    // Check if OBDII reader has responded with '>', indicating it is ready for another command
+    // Check first two characters in case this message does not contain other data
+    for (int i = 0; i < length; i++)
     {
-        // Check if OBDII reader has responded with '>', indicating it is ready for another command
-        for (int i = 0; i < length; i++)
+        if (data[i] == '>')
         {
-            if (data[i] == '>')
-            {
-                // no longer waiting for a response, so ok to request more data
-                waitingForResponse = false;
-            }
+            // no longer waiting for a response, so ok to request more data
+            waitingForResponse = false;
         }
     }
+    
 }
 
 // Note on rotation:
