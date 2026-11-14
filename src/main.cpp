@@ -61,12 +61,16 @@
 #endif
 
 // Predeclare Functions
-uint8_t centreTextPosX(char* text);
-void renderText(char* text, char alignment, uint8_t y);
-void renderHeading(char* headingText, const uint8_t* font, char alignment);
+uint8_t centreTextPosX(const char* text);
+void renderText(const char* text, char alignment, uint8_t y);
+void renderHeading(const char* headingText, const uint8_t* font, char alignment);
 void renderValue(int value, const uint8_t* font, char alignment);
+void renderStatus(const char* statusText);
+
 char checkButtonPress(int pin, int* button_state, int* last_button_state);
 void updateValueDisplay(char* heading, int value);
+void updateStatusDisplay(const char* status);
+
 bool connectToReader();
 
 void requestData();
@@ -75,7 +79,7 @@ void displayData(uint8_t *rawData);
 int scanTime = 5; // in seconds
 BLEScan* pBLEScan;
 
-static boolean doScan = false;
+static boolean doScan = true;
 static boolean doConnect = false;
 static boolean connected = false;
 static BLEAdvertisedDevice *obdDevice = nullptr;
@@ -120,7 +124,7 @@ class MyClientCallback : public BLEClientCallbacks
   }
 
   void onDisconnect(BLEClient *pclient)
-  {
+  { 
     connected = false;
     doScan = true;
     Serial.println("Disconnected from OBDII reader");
@@ -168,6 +172,13 @@ int counter = 0;
 
 char heading[20] = "button";
 
+// Set fonts
+const uint8_t *headingFont          = u8g2_font_inr16_mr;
+const uint8_t *valueFont            = u8g2_font_inr30_mr;
+const uint8_t *statusFontLarge      = valueFont;
+const uint8_t *statusFontSmall      = headingFont;
+const uint8_t *statusFontVerySmall  = u8g2_font_scrum_tf;
+
 // Tracking data to display
 int numFields = 2; // number of supported fields
 
@@ -177,13 +188,16 @@ unsigned long responseTimeoutThresh = 2000; // ms
 
 void setup(void)
 {
-    // Initialise serial
-    Serial.begin(115200);
-    delay(2000); // wait for serial to initialise
-    Serial.println("Initialising OLED display");
-
     // Initialise display
     u8g2.begin();
+
+    // Display boot message
+    updateStatusDisplay("hello");
+
+    // Initialise serial and display
+    Serial.begin(115200);
+
+    delay(2000); // Wait for serial to initialise
 
     // Initialise button as an input
     pinMode(sw_pin, INPUT);
@@ -215,7 +229,7 @@ void loop(void)
     // Connect to obd reader if found
     if (doConnect)
     {
-        Serial.println("Connecting to device.");
+        Serial.println("Connecting to OBDII reader.");
 
         if (connectToReader())
         {
@@ -232,6 +246,9 @@ void loop(void)
     // Restart scan if disconnected
     if (!connected && doScan)
     {
+        // Update display to alert user
+        updateStatusDisplay("disconnected");
+
         Serial.println("Scanning for OBD readers.");
         BLEDevice::getScan()->start(5, false);
         delay(1000);
@@ -283,8 +300,6 @@ void loop(void)
 
 bool connectToReader()
 {
-    Serial.println("Connecting to OBDII reader");
-
     // create client
     pClient = BLEDevice::createClient();
     Serial.println(" - Created client");
@@ -443,14 +458,20 @@ void displayData(uint8_t *rawData)
 }
 
 // Return the x position of the left of a string to centre text
-uint8_t centreTextPosX(char* text)
+uint8_t centreTextPosX(const char* text)
 {
     return (DISP_WIDTH - u8g2.getStrWidth(text)) / 2;
 }
 
+// Return the y position of the top of a string to centre text based on the current font
+uint8_t centreTextPosY(void)
+{
+    return (DISP_HEIGHT - u8g2.getMaxCharHeight()) / 2;
+}
+
 // Render text assuming font and font pos have been set already
 //  - Alignment can be 'l', 'c' or 'r'
-void renderText(char* text, char alignment, uint8_t y)
+void renderText(const char* text, char alignment, uint8_t y)
 {
     // Work out alignment
     uint8_t x = 0;
@@ -478,7 +499,7 @@ void renderText(char* text, char alignment, uint8_t y)
 
 // Display the heading
 //  - Alignment can be 'l', 'c' or 'r'
-void renderHeading(char* headingText, const uint8_t* font, char alignment)
+void renderHeading(const char* headingText, const uint8_t* font, char alignment)
 {
     // Set the font, and set reference point to top left of text
     u8g2.setFont(font);
@@ -511,6 +532,33 @@ void renderValue(int value, const uint8_t* font, char alignment)
     renderText(value_text, alignment, y);
 }
 
+void renderStatus(const char* statusText)
+{
+    // Initially set to large font
+    u8g2.setFont(statusFontLarge);
+
+    // Check length, if too long, make font smaller
+    if (u8g2.getStrWidth(statusText) >= DISP_WIDTH)
+    {
+        u8g2.setFont(statusFontSmall);
+
+        // Check if still too big
+        if (u8g2.getStrWidth(statusText) >= DISP_WIDTH)
+        {
+            u8g2.setFont(statusFontVerySmall);
+        }
+    }
+
+    u8g2.setFontPosTop();
+
+    // Set position to centre
+    uint8_t x = centreTextPosX(statusText);
+    uint8_t y = centreTextPosY();
+
+    // Render status message
+    u8g2.drawStr(x, y, statusText);
+}
+
 // Check for a rising edge of a pushbutton on a given pin. Includes 15 ms debounce
 char checkButtonPress(int pin, int* button_state, int* last_button_state)
 {
@@ -541,6 +589,8 @@ char checkButtonPress(int pin, int* button_state, int* last_button_state)
     return button_pressed;
 }
 
+// -------------- DISPLAY STATES --------------------
+
 // Update display value with a given heading
 // Both text fields will be centre aligned
 void updateValueDisplay(char* heading, int value)
@@ -549,10 +599,20 @@ void updateValueDisplay(char* heading, int value)
     do
     {
         // Set heading 
-        renderHeading(heading, u8g2_font_inr16_mr, 'c');
+        renderHeading(heading, headingFont, 'c');
 
         // Display value
-        renderValue(value, u8g2_font_inr30_mr, 'c');
+        renderValue(value, valueFont, 'c');
 
+    } while (u8g2.nextPage());
+}
+
+void updateStatusDisplay(const char* status)
+{
+    u8g2.firstPage();
+    do
+    {
+        // Set status 
+        renderStatus(status);
     } while (u8g2.nextPage());
 }
