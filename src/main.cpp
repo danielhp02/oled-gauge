@@ -89,6 +89,30 @@ static BLERemoteCharacteristic *pRxCharacteristic = nullptr;
 static bool waitingForResponse = false;
 static bool displayLock = false;
 
+// Variables to track button presses
+int button_state = 0;
+int last_button_state = 0;
+int counter = 0;
+
+char heading[20] = "button";
+
+// Set fonts
+const uint8_t *headingFont          = u8g2_font_inr16_mr;
+const uint8_t *valueFont            = u8g2_font_inr30_mr;
+const uint8_t *statusFontLarge      = valueFont;
+const uint8_t *statusFontSmall      = headingFont;
+const uint8_t *statusFontVerySmall  = u8g2_font_scrum_tf;
+
+// Tracking data to display
+const int numFields = 3; // number of supported fields
+int prevData[numFields]; 
+
+static int battIndex = 1;
+
+// Initialise reponse timeout timer, threshold is 2000ms
+unsigned long responseTimer = 0;
+unsigned long responseTimeoutThresh = 2000; // ms
+
 // ------------------ Callback functions ---------------------------------------
 // Callback class for Bluetooth
 class MyCallbacks: public BLEAdvertisedDeviceCallbacks
@@ -137,8 +161,8 @@ void notifyCallback(BLERemoteCharacteristic* characteristic, uint8_t* data, size
     // Serial.printf(", length: %d", length);
     Serial.println();
 
-    // Update display if correct response (i.e. to mode 1 request)
-    if (data[0] == '4' && data[1] == '1')
+    // Update display if correct response (i.e. to mode 1 request, or battery AT)
+    if ((data[0] == '4' && data[1] == '1') || counter == battIndex)
     {
         displayData(data, false);
         displayLock = false;
@@ -169,28 +193,6 @@ void notifyCallback(BLERemoteCharacteristic* characteristic, uint8_t* data, size
 
 // Create display object
 U8G2_SH1106_128X64_NONAME_1_4W_HW_SPI u8g2(U8G2_R2, spi_cs, spi_dc, spi_rst);
-
-// Variables to track button presses
-int button_state = 0;
-int last_button_state = 0;
-int counter = 0;
-
-char heading[20] = "button";
-
-// Set fonts
-const uint8_t *headingFont          = u8g2_font_inr16_mr;
-const uint8_t *valueFont            = u8g2_font_inr30_mr;
-const uint8_t *statusFontLarge      = valueFont;
-const uint8_t *statusFontSmall      = headingFont;
-const uint8_t *statusFontVerySmall  = u8g2_font_scrum_tf;
-
-// Tracking data to display
-const int numFields = 2; // number of supported fields
-int prevData[numFields]; 
-
-// Initialise reponse timeout timer, threshold is 2000ms
-unsigned long responseTimer = 0;
-unsigned long responseTimeoutThresh = 2000; // ms
 
 void setup(void)
 {
@@ -401,8 +403,13 @@ void requestData()
             strcat(req, "05");
             break;
 
-        // RPM
+        // Battery Voltage
         case 1:
+            strcpy(req, "ATRV"); // Battery voltage is measured by the ELM327
+            break;
+
+        // RPM
+        case 2:
             strcat(req, "0C");
             break;
     }
@@ -423,10 +430,13 @@ void displayData(uint8_t *rawData, bool oldData)
     char parsedByteA[2];
     char parsedByteB[2];
 
+    char parsedString[5];
+
     int byteA;
     int byteB;
 
     int displayValue;
+    
 
     // Display
     switch (counter)
@@ -447,8 +457,25 @@ void displayData(uint8_t *rawData, bool oldData)
 
             break;
             
-        // RPM
+        // Battery Voltage
         case 1:
+            if (!oldData)
+            {
+                // Battery voltage is returned like 12.6V
+                parsedString[0] = rawData[0];
+                parsedString[1] = rawData[1];
+                parsedString[2] = rawData[3];
+                
+                displayValue = (int)strtol(parsedString, NULL, 10); // Store as 126
+            }
+
+            // Update display
+            strcpy(heading, "battery");
+
+            break;
+
+        // RPM
+        case 2:
             if (!oldData)
             {
                 // RPM is two bytes
@@ -548,7 +575,15 @@ void renderValue(int value, const uint8_t* font, char alignment)
     // Convert value to char *
     char value_text[20];
 
-    sprintf(value_text, "%d", value);
+    // Convert value to string, if it's battery voltage, it needs dividing by 10
+    if (counter != battIndex)
+    {
+        sprintf(value_text, "%d", value);
+    }
+    else
+    {
+        sprintf(value_text, "%.1f", value/10.0);
+    }
 
     // Set vertical position of text
     uint8_t y = DISP_HEIGHT;
