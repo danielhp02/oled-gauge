@@ -8,6 +8,7 @@
 // Font Reference:
 // - u8g2_font_scrum_tr: nice general font, 15px tall
 // - u8g2_font_inr30_mr: inconsolata, 30px tall (also 16, 19, 21, 24, 27)
+// - u8g2_font_scrum_tf: scrum, 8px tall
 
 #include <Arduino.h>
 #include <U8g2lib.h>
@@ -18,17 +19,12 @@
 
 #include <BLEDevice.h>
 #include <BLEUtils.h>
-// #include <BLEServer.h>
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 
 // Define display dimensions
 #define DISP_WIDTH 128
 #define DISP_HEIGHT 64
-
-// Define Bluetooth UUIDs
-// #define SERVICE_UUID        "6b4b1061-f195-4060-963a-b7bfe1761866"
-// #define CHARACTERISTIC_UUID "84a0ca94-4cb6-4440-b507-1819c97e7a83"
 
 // Setup I/O pins
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
@@ -76,6 +72,7 @@ bool connectToReader();
 void requestData();
 void displayData(uint8_t *rawData);
 
+// Bluetooth and connection constants
 int scanTime = 5; // in seconds
 BLEScan* pBLEScan;
 
@@ -85,13 +82,13 @@ static boolean connected = false;
 static BLEAdvertisedDevice *obdDevice = nullptr;
 static BLEClient *pClient = nullptr;
 
-// static BLEUUID serviceUUID;
 static BLERemoteService *pService = nullptr;
 static BLERemoteCharacteristic *pTxCharacteristic = nullptr;
 static BLERemoteCharacteristic *pRxCharacteristic = nullptr;
 
 static bool waitingForResponse = false;
 
+// ------------------ Callback functions ---------------------------------------
 // Callback class for Bluetooth
 class MyCallbacks: public BLEAdvertisedDeviceCallbacks
 {
@@ -115,7 +112,7 @@ class MyCallbacks: public BLEAdvertisedDeviceCallbacks
   }
 };
 
-// Client callbacks to handle connection events
+// Client callback class to handle connection events
 class MyClientCallback : public BLEClientCallbacks
 {
   void onConnect(BLEClient *pclient)
@@ -197,7 +194,8 @@ void setup(void)
     // Initialise serial and display
     Serial.begin(115200);
 
-    delay(2000); // Wait for serial to initialise
+    // Wait for serial to initialise
+    delay(2000);
 
     // Initialise button as an input
     pinMode(sw_pin, INPUT);
@@ -210,7 +208,7 @@ void setup(void)
     // initialise scan
     pBLEScan = BLEDevice::getScan();
 
-    // Attach callback function
+    // Attach callback object
     pBLEScan->setAdvertisedDeviceCallbacks(new MyCallbacks());
 
     pBLEScan->setActiveScan(true); // active scan uses more power, but get results
@@ -259,11 +257,10 @@ void loop(void)
     {
         if (!waitingForResponse)
         {
-            // Request coolant temp
-            // pTxCharacteristic->writeValue("01 05\r");
+            // Request data from the OBDII reader
             requestData();
 
-            // Set flag to prevent spamming adapter
+            // Set flag to prevent spam
             waitingForResponse = true;
 
             // Start a timer incase the response times out or an unexpected response is received
@@ -280,8 +277,7 @@ void loop(void)
         }
     }
 
-    // Check for button press
-    // TODO: replace with a screen toggle or something
+    // Check for button press and cycle field
     if (checkButtonPress(sw_pin, &button_state, &last_button_state))
     {
         // Increment counter
@@ -290,17 +286,16 @@ void loop(void)
         // "Overflow" counter if exceeds number of supported fields
         counter %= numFields;
 
-        // Update display
-        // updateValueDisplay(heading, counter);
-
         // log button press over serial
         Serial.printf("Button pressed! Current field: %d, waiting status: %d\n", counter, waitingForResponse);
     }
 }
 
+// Function to handle device selection and connection
+// Returns bool representing success
 bool connectToReader()
 {
-    // create client
+    // Create client
     pClient = BLEDevice::createClient();
     Serial.println(" - Created client");
     pClient->setClientCallbacks(new MyClientCallback());
@@ -377,6 +372,7 @@ bool connectToReader()
     return false;
 }
 
+// Function to form and send an OBDII request over Bluetooth
 void requestData()
 {
     // Initialise request string with mode string
@@ -398,22 +394,19 @@ void requestData()
     // Add carriage return
     strcat(req, "\r");
 
-    // Serial.print("Requesting: ");
-    // Serial.write(req, 4);
-    // Serial.println();
-
     // Send request
-    pTxCharacteristic->writeValue(req); //"01 05\r");
+    pTxCharacteristic->writeValue(req);
 }
 
+// Function to parse and display received data
+// Input: raw received buffer
+// Source for parsing calculations: https://en.wikipedia.org/wiki/OBD-II_PIDs
 void displayData(uint8_t *rawData)
 {
-    // inputs: full obd return
-
+    // Initialise variables
     char parsedByteA[2];
     char parsedByteB[2];
 
-    // initialise variables
     int coolantTemp;
     int byteA;
     int byteB;
@@ -614,5 +607,6 @@ void updateStatusDisplay(const char* status)
     {
         // Set status 
         renderStatus(status);
+        
     } while (u8g2.nextPage());
 }
