@@ -136,10 +136,15 @@ void notifyCallback(BLERemoteCharacteristic* characteristic, uint8_t* data, size
     // Serial.printf(", length: %d", length);
     Serial.println();
 
-    // update display if corrent response (i.e. to mode 1 request)
+    // Update display if correct response (i.e. to mode 1 request)
     if (data[0] == '4' && data[1] == '1')
     {
         displayData(data);
+    }
+    // Otherwise check if OBD reader is unable to communicate with the vehicle
+    else if (strstr((const char*)data, "NO DATA"))
+    {
+        updateStatusDisplay("no data");
     }
 
     // Check if OBDII reader has responded with '>', indicating it is ready for another command
@@ -607,6 +612,6 @@ void updateStatusDisplay(const char* status)
     {
         // Set status 
         renderStatus(status);
-        
+
     } while (u8g2.nextPage());
 }
