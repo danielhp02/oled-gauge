@@ -70,7 +70,7 @@ void updateStatusDisplay(const char* status);
 bool connectToReader();
 
 void requestData();
-void displayData(uint8_t *rawData);
+void displayData(uint8_t *rawData, bool oldData);
 
 // Bluetooth and connection constants
 int scanTime = 5; // in seconds
@@ -87,6 +87,7 @@ static BLERemoteCharacteristic *pTxCharacteristic = nullptr;
 static BLERemoteCharacteristic *pRxCharacteristic = nullptr;
 
 static bool waitingForResponse = false;
+static bool displayLock = false;
 
 // ------------------ Callback functions ---------------------------------------
 // Callback class for Bluetooth
@@ -139,12 +140,14 @@ void notifyCallback(BLERemoteCharacteristic* characteristic, uint8_t* data, size
     // Update display if correct response (i.e. to mode 1 request)
     if (data[0] == '4' && data[1] == '1')
     {
-        displayData(data);
+        displayData(data, false);
+        displayLock = false;
     }
     // Otherwise check if OBD reader is unable to communicate with the vehicle
     else if (strstr((const char*)data, "NO DATA"))
     {
         updateStatusDisplay("no data");
+        displayLock = true;
     }
 
     // Check if OBDII reader has responded with '>', indicating it is ready for another command
@@ -182,7 +185,8 @@ const uint8_t *statusFontSmall      = headingFont;
 const uint8_t *statusFontVerySmall  = u8g2_font_scrum_tf;
 
 // Tracking data to display
-int numFields = 2; // number of supported fields
+const int numFields = 2; // number of supported fields
+int prevData[numFields]; 
 
 // Initialise reponse timeout timer, threshold is 2000ms
 unsigned long responseTimer = 0;
@@ -290,6 +294,13 @@ void loop(void)
 
         // "Overflow" counter if exceeds number of supported fields
         counter %= numFields;
+
+        // Update display to prevent weird numbers appearing
+        if (connected && !displayLock)
+        {
+            displayData(nullptr, true);
+            Serial.println("Old value displayed.");
+        }
 
         // log button press over serial
         Serial.printf("Button pressed! Current field: %d, waiting status: %d\n", counter, waitingForResponse);
@@ -404,55 +415,71 @@ void requestData()
 }
 
 // Function to parse and display received data
-// Input: raw received buffer
+// Input: raw received buffer, and flag in case previous values are to be used
 // Source for parsing calculations: https://en.wikipedia.org/wiki/OBD-II_PIDs
-void displayData(uint8_t *rawData)
+void displayData(uint8_t *rawData, bool oldData)
 {
     // Initialise variables
     char parsedByteA[2];
     char parsedByteB[2];
 
-    int coolantTemp;
     int byteA;
     int byteB;
-    int rpm;
+
+    int displayValue;
 
     // Display
     switch (counter)
     {
         // Coolant temp
         case 0:
-            // Coolant temp is just one byte
-            parsedByteA[0] = rawData[6];
-            parsedByteA[1] = rawData[7];
+            if (!oldData)
+            {
+                // Coolant temp is just one byte
+                parsedByteA[0] = rawData[6];
+                parsedByteA[1] = rawData[7];
 
-            coolantTemp = (int)strtol(parsedByteA, NULL, 16) - 40; // offset to include negative temps
+                displayValue = (int)strtol(parsedByteA, NULL, 16) - 40; // offset to include negative temps
+            }
 
-            // update display
+            // Update display
             strcpy(heading, "coolant");
-            updateValueDisplay(heading, coolantTemp);
 
             break;
             
         // RPM
         case 1:
-            // RPM is two bytes
-            parsedByteA[0] = rawData[6];
-            parsedByteA[1] = rawData[7];
-            parsedByteB[0] = rawData[9]; // skip space
-            parsedByteB[1] = rawData[10];
+            if (!oldData)
+            {
+                // RPM is two bytes
+                parsedByteA[0] = rawData[6];
+                parsedByteA[1] = rawData[7];
+                parsedByteB[0] = rawData[9]; // skip space
+                parsedByteB[1] = rawData[10];
 
-            byteA = (int)strtol(parsedByteA, NULL, 16);
-            byteB = (int)strtol(parsedByteB, NULL, 16);
+                byteA = (int)strtol(parsedByteA, NULL, 16);
+                byteB = (int)strtol(parsedByteB, NULL, 16);
 
-            rpm = (256 * byteA + byteB)/4;
+                displayValue = (256 * byteA + byteB)/4;
+            }
 
             // update display
             strcpy(heading, "rpm");
-            updateValueDisplay(heading, rpm);
 
             break;
     }
+
+    // Store current value, or recall if needed
+    if (!oldData)
+    {
+        prevData[counter] = displayValue;
+    }
+    else
+    {
+        displayValue = prevData[counter];
+    }
+
+    updateValueDisplay(heading, displayValue);
 }
 
 // Return the x position of the left of a string to centre text
@@ -596,6 +623,9 @@ void updateValueDisplay(char* heading, int value)
     u8g2.firstPage();
     do
     {
+        u8g2.setDrawColor(1);
+        u8g2.setFontMode(1);  // Transparent font rendering
+
         // Set heading 
         renderHeading(heading, headingFont, 'c');
 
@@ -610,6 +640,9 @@ void updateStatusDisplay(const char* status)
     u8g2.firstPage();
     do
     {
+        u8g2.setDrawColor(1);
+        u8g2.setFontMode(1);  // Transparent font rendering
+
         // Set status 
         renderStatus(status);
 
